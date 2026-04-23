@@ -1,4 +1,4 @@
-import {createOidc} from 'oidc-spa/core'
+import {createOidc, type Oidc} from 'oidc-spa/core'
 import {z} from 'zod'
 
 const decodedIdTokenSchema = z.object({
@@ -11,7 +11,6 @@ const decodedIdTokenSchema = z.object({
 
 type DecodedIdToken = z.infer<typeof decodedIdTokenSchema>
 
-type OidcInstance = Awaited<ReturnType<typeof createOidc<DecodedIdToken>>>
 
 const auth = {
     clientId: 'test-client',
@@ -21,14 +20,15 @@ const auth = {
 
 export const issuerUri = `${auth.url}/realms/${auth.realm}`
 
-let _oidc: OidcInstance | null = window.__oidc ?? null
+let _oidc: Oidc.LoggedIn<DecodedIdToken> | undefined = undefined;
 
-export async function initializeOidc(): Promise<OidcInstance> {
+export async function initializeOidc(): Promise<void> {
     console.log(`Starting OIDC with issuer [${issuerUri}]; clientId [${auth.clientId}]`)
 
     _oidc = await createOidc({
         issuerUri,
         clientId: auth.clientId,
+        autoLogin: true,
         decodedIdTokenSchema,
         // BUG (oidc-spa#177): autoLogoutParams.url is ignored.
         // oidc-spa always sends window.location.origin as post_logout_redirect_uri,
@@ -40,33 +40,17 @@ export async function initializeOidc(): Promise<OidcInstance> {
         debugLogs: import.meta.env.DEV
     })
 
-    // persist oidc on window so that it survives hot reloads
-    window.__oidc = _oidc
-    return _oidc
 }
 
-function getOidc(): OidcInstance {
-    if (!_oidc) throw new Error('OIDC not initialized. Call initializeOidc() first.')
+function getOidc() {
+    if (_oidc === undefined) throw new Error('OIDC not initialized. Call initializeOidc() first.')
     return _oidc
 }
 
 export async function getAccessToken(): Promise<string | undefined> {
-    const oidc = getOidc()
-    if (oidc.isUserLoggedIn) {
-        const tokens = await oidc.getTokens()
-        return tokens.accessToken
-    }
-}
-
-export function isLoggedIn(): boolean {
-    return _oidc?.isUserLoggedIn ?? false
-}
-
-export async function login(): Promise<void> {
-    const oidc = getOidc()
-    if (!oidc.isUserLoggedIn) {
-        await oidc.login({doesCurrentHrefRequiresAuth: true})
-    }
+  const oidc = getOidc();
+  const tokens = await oidc.getTokens();
+  return tokens.accessToken;
 }
 
 // BUG (oidc-spa#177): the `url` parameter is ignored by oidc-spa.
@@ -74,13 +58,12 @@ export async function login(): Promise<void> {
 // initialization, so Keycloak always redirects back to the app root after logout.
 // The app then re-initializes and launches the login flow instead of showing signed-out.html.
 export async function logout(): Promise<void> {
-    const oidc = getOidc()
-    if (oidc.isUserLoggedIn) {
-        await oidc.logout({
-            redirectTo: 'specific url',
-            url: `${window.location.origin}/auth/signed-out.html`
-        })
-    }
+  const oidc = getOidc();
+
+  await oidc.logout({
+    redirectTo: "specific url",
+    url: `${window.location.origin}/auth/signed-out.html`,
+  });
 }
 
 // Workaround for oidc-spa#177: bypass oidc.logout() and navigate directly to Keycloak's
@@ -102,7 +85,6 @@ export async function logoutWorkaround(): Promise<void> {
 
 export function getDecodedIdToken(): DecodedIdToken {
     const oidc = getOidc()
-    if (!oidc.isUserLoggedIn) throw new Error('User is not logged in')
     return oidc.getDecodedIdToken()
 }
 
